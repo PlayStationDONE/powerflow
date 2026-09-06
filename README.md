@@ -143,11 +143,20 @@ memory and regulator losses that a higher clock induces but which are not billed
 to any one task. At idle the apps account for 10–25% of system draw.
 
 So the list does not pretend apps sum to the wall figure. Whatever is not
-attributable to an app — display, GPU, WindowServer, background daemons and the
-idle floor — is shown honestly as a **System & display** row, and that row is
-usually the largest number on screen. On a laptop it genuinely is: the display
-and the idle baseline dominate. The bars compare apps only with each other,
-since letting the remainder set the scale would flatten them all to nothing.
+attributable to an app is shown as a **System & display** row, and it is usually
+the largest number on screen.
+
+**That row is not an idle figure**, which is the easiest thing to misread about
+it. WindowServer is the clearest case: it runs as `_windowserver`, so
+`proc_pid_rusage` is denied for it and its energy cannot be read at all — let
+alone charged to the app whose drawing keeps it busy. Measured on this machine
+it was using 52% of a core while the whole app list totalled 2.6 W against a
+31 W system load. The row also carries the display, the GPU, every other
+root-owned daemon, and the roughly half of app power that `ri_energy_nj` does
+not bill. A machine reading 30 W here is working, not resting.
+
+The bars compare apps only with each other, since letting the remainder set the
+scale would flatten them all to nothing.
 
 Apple does not publish true per-app watts — Activity Monitor shows a unitless
 "Energy Impact" for exactly this reason. These are real measurements of a real

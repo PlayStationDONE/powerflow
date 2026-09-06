@@ -58,6 +58,12 @@ struct AppDrawList: View {
     /// usually the largest number on screen - a laptop spends most of its power
     /// on the display and the idle floor - and letting it set the scale would
     /// flatten every app bar to nothing.
+    /// The remainder is the number people most often misread, so say plainly
+    /// what is in it.
+    static let systemRowExplanation = """
+        The display, GPU, and everything the kernel does not bill to one of         your apps. WindowServer is the big one: it runs as a system user, so         its power cannot be read or charged to the app that caused it, even         though app drawing is what keeps it busy. Not an idle figure.
+        """
+
     private var maxAppWatts: Double {
         max(rows.filter { !$0.isSystem }.map(\.watts).max() ?? 1, 0.001)
     }
@@ -123,6 +129,7 @@ struct AppDrawList: View {
         }
         .padding(.horizontal, s(Ref.rowInset))
         .frame(width: s(Ref.contentWidth), height: s(Ref.rowHeight))
+        .help(row.isSystem ? Self.systemRowExplanation : "\(row.name) — CPU energy attributed to this app by the kernel")
         .background(alignment: .leading) {
             ZStack(alignment: .leading) {
                 RoundedRectangle(cornerRadius: radius, style: .continuous)
