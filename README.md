@@ -43,6 +43,11 @@ sink while charging, absent when idle.
 Everything is read-only and local: the app opens the SMC user client for
 reading, never writes a key, and makes no network connections.
 
+On a Mac with no battery the panel says so rather than drawing an empty frame.
+On wake the SMC connection is re-opened and the smoothing, load average and
+per-app baselines are all discarded, because every one of them describes a
+machine that was asleep.
+
 ## Install
 
 ```bash

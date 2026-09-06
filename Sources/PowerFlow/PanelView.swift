@@ -15,6 +15,8 @@ struct PanelView: View {
     /// False renders only the part that mirrors the reference screenshot,
     /// which is how the 1:1 layout is regression tested.
     var showsExtras = true
+    /// False on a Mac with no battery, where there is no flow to draw.
+    var hasBattery = true
     /// Called while the user drags the charge-target handle.
     var onTargetChange: ((Double) -> Void)? = nil
     /// Called while the user drags the dashed floor marker.
@@ -23,6 +25,30 @@ struct PanelView: View {
     private var s: Scale { Scale(panelWidth: panelWidth) }
 
     var body: some View {
+        if hasBattery { panel } else { noBattery }
+    }
+
+    /// Desktop Macs have no pack, so the diagram would be an empty frame and
+    /// the runtime meaningless. Say so instead of drawing nothing.
+    private var noBattery: some View {
+        VStack(spacing: s(Ref.rowIconGap)) {
+            Image(systemName: "desktopcomputer")
+                .font(.system(size: s(Ref.plugGlyph)))
+                .foregroundStyle(Palette.energy)
+            Text("No battery")
+                .font(.system(size: s(Ref.labelFontSize), weight: .medium))
+                .foregroundStyle(Palette.label)
+            Text("PowerFlow needs a laptop battery to chart power flow.")
+                .font(.system(size: s(Ref.runtimeCaptionSize)))
+                .foregroundStyle(Palette.muted)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(s(Ref.runtimeInset))
+        .frame(width: panelWidth, height: s.panelHeight)
+    }
+
+    private var panel: some View {
         VStack(spacing: 0) {
             BatteryPillView(
                 snapshot: snapshot, target: target, floor: floor, s: s,

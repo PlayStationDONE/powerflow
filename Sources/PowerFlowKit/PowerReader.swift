@@ -45,10 +45,20 @@ public struct PowerSourceState: Equatable, Sendable {
 ///                         which change slowly enough that its ~60 s
 ///                         refresh does not matter
 public final class PowerReader {
-    private let smc: SMCReader?
+    private var smc: SMCReader?
+    /// Consecutive failed SMC reads. A couple can happen around sleep; a run of
+    /// them means the connection is stale and needs replacing.
+    private var failures = 0
+    private let failuresBeforeReconnect = 3
 
     public init() {
         smc = SMCReader()
+    }
+
+    /// Called when the machine wakes: the user client is often unusable by then.
+    public func handleWake() {
+        if smc?.reconnect() != true { smc = SMCReader() }
+        failures = 0
     }
 
     /// True when live SMC wattages are available; otherwise the app falls back
@@ -80,7 +90,15 @@ public final class PowerReader {
               adapter.isFinite, adapter >= 0, adapter < 500,
               millivolts > 1000, millivolts < 30000,
               abs(milliamps) < 20000
-        else { return nil }
+        else {
+            failures += 1
+            if failures >= failuresBeforeReconnect {
+                failures = 0
+                if self.smc?.reconnect() != true { self.smc = SMCReader() }
+            }
+            return nil
+        }
+        failures = 0
         return SMCPower(adapter: adapter, battery: millivolts / 1000 * milliamps / 1000)
     }
 

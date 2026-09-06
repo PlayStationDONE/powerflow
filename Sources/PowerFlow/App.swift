@@ -428,6 +428,7 @@ struct PanelRoot: View {
             panelWidth: Settings.panelWidth,
             rows: monitor.panelRows,
             runtimeText: monitor.panelRuntime,
+            hasBattery: monitor.hasBattery,
             onTargetChange: { settings.setTarget($0) },
             onFloorChange: { settings.setFloor($0) }
         )
@@ -485,7 +486,8 @@ enum Renderer {
             panelWidth: width,
             rows: rows,
             runtimeText: runtime,
-            showsExtras: !args.contains("--reference-only")
+            showsExtras: !args.contains("--reference-only"),
+            hasBattery: !args.contains("--no-battery")
         )
         .background(background(args: args))
 

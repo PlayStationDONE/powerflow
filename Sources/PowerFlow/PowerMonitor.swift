@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import Foundation
 import IOKit.ps
@@ -86,6 +87,25 @@ final class PowerMonitor: ObservableObject {
         }
         RunLoop.main.add(a, forMode: .common)
         appTimer = a
+
+        // Waking is the one moment everything is guaranteed stale: the SMC
+        // connection may be dead, the readings are minutes old, and the load
+        // average describes a machine that was asleep.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.handleWake() }
+        }
+    }
+
+
+    private func handleWake() {
+        reader.handleWake()
+        smoothed = nil          // do not glide out of a stale reading
+        loadAverage = LoadAverager(window: 60)
+        appSmoothed.removeAll()
+        _ = energy.sample(appNames: RunningApps.names())
+        refresh()
     }
 
     deinit {

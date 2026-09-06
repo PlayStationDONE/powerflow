@@ -16,12 +16,30 @@ public final class SMCReader {
     private var connection: io_connect_t = 0
 
     public init?() {
+        guard Self.open(&connection) else { return nil }
+    }
+
+    /// Drops the user client and opens a fresh one.
+    ///
+    /// The connection can go stale across sleep, and every read afterwards
+    /// fails silently - which would leave the app quietly falling back to
+    /// IORegistry figures that only refresh once a minute, with no sign that
+    /// anything was wrong.
+    @discardableResult
+    public func reconnect() -> Bool {
+        if connection != 0 { IOServiceClose(connection) }
+        connection = 0
+        return Self.open(&connection)
+    }
+
+    private static func open(_ conn: inout io_connect_t) -> Bool {
         let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AppleSMC"))
-        guard service != IO_OBJECT_NULL else { return nil }
+        guard service != IO_OBJECT_NULL else { return false }
         defer { IOObjectRelease(service) }
-        var conn: io_connect_t = 0
-        guard IOServiceOpen(service, mach_task_self_, 0, &conn) == kIOReturnSuccess else { return nil }
-        connection = conn
+        var handle: io_connect_t = 0
+        guard IOServiceOpen(service, mach_task_self_, 0, &handle) == kIOReturnSuccess else { return false }
+        conn = handle
+        return true
     }
 
     deinit {
