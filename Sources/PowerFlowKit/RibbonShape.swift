@@ -79,15 +79,20 @@ public enum Motion {
     /// How often the per-app list is rebuilt.
     public static let appInterval: TimeInterval = 3.0
 
-    /// Slightly longer than the sample interval and perfectly linear.
+    /// A critically damped spring, tuned to settle well inside the gap between
+    /// readings.
     ///
-    /// A curve shorter than the interval finishes early and leaves the panel
-    /// frozen until the next reading, which reads as a pulse rather than
-    /// motion; an ease-in-out restarted every second from a moving state also
-    /// breaks velocity at each sample. Linear, slightly overlapping, means one
-    /// reading flows into the next without ever stopping.
-    public static let flow = Animation.linear(duration: sampleInterval * 1.2)
-    public static let appFlow = Animation.linear(duration: appInterval * 0.5)
+    /// The sensors only change about once a second, so there is no more detail
+    /// to be had by animating for longer - a slower curve just delays the
+    /// number. A spring starts fast, decelerates into rest, and blends its
+    /// velocity when a new reading interrupts it mid-flight, so there is none
+    /// of the jerk an ease-in-out gets from restarting while still moving.
+    ///
+    /// `dampingFraction` is exactly 1: anything less overshoots, and a ribbon
+    /// that springs past its wattage before settling back is showing a reading
+    /// the machine never had.
+    public static let flow = Animation.spring(response: 0.42, dampingFraction: 1.0)
+    public static let appFlow = Animation.spring(response: 0.5, dampingFraction: 1.0)
 }
 
 public extension RibbonShape {

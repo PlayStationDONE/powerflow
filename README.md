@@ -56,6 +56,13 @@ Left-click the menu-bar item to open the panel, or press **⌥⌘P** from
 anywhere. Right-click for adapter, health, cycle count, temperature, what the
 menu-bar item shows, **Launch at Login**, and Quit.
 
+![The menu bar item](docs/menubar.png)
+
+The item defaults to the icon alone. A crowded menu bar fills from the right
+edge leftward and pushes anything that does not fit past the notch, so the
+narrowest form is the one most likely to be visible; the percentage and wattage
+variants are in the right-click menu.
+
 ### If it does not appear in the menu bar
 
 Almost always because the menu bar is full, not because the app failed. macOS
@@ -184,6 +191,8 @@ swift test                                  # 28 tests, no hardware needed
 .build/release/PowerFlow --diagnose         # status item placement, notch, hotkey
 .build/release/PowerFlow --stability        # 60 samples, flags impossible readings
 .build/release/PowerFlow --animtest dir/    # frame-by-frame animation measurement
+.build/release/PowerFlow --sensorrate      # how often the SMC actually changes
+.build/release/PowerFlow --render-menubar dir/   # the status item, each style
 .build/release/PowerFlow --selftest out.png # opens the real popover, captures its pixels
 .build/release/PowerFlow --render out.png --width 340 --scale 3.7235 --live
 .build/release/PowerFlow --render out.png --state charging|battery|full|sample
@@ -207,37 +216,47 @@ Three things made the panel look jerky, all fixed:
    them glided, and the mismatch read as stutter. `RibbonShape` is a real
    `Shape` whose four edge positions are exposed as `animatableData`, so the
    geometry is tweened per frame.
-2. **The curve was shorter than the gap between readings.** An `easeInOut` of
-   0.45 s against 1 s sampling animated for 0.45 s and then sat still for
-   0.55 s — a pulse, not motion. Timing is now linear and slightly *longer*
-   than the sample interval, so one reading flows into the next without ever
-   stopping, and there is no ease-in restarting from a moving state.
+2. **The curve fought the sampling rate.** An `easeInOut` of 0.45 s against 1 s
+   sampling animated briefly and then sat still, and restarting an ease-*in*
+   from an already-moving state breaks velocity at every sample. Motion is now
+   a critically damped spring: it starts fast, decelerates into rest, and blends
+   its velocity when a new reading interrupts it.
 3. **Numbers snapped and rows swapped.** Wattages use
    `.contentTransition(.numericText())` so digits roll, and per-app watts are
    smoothed before sorting, which stops rows trading places every few seconds.
 
+`dampingFraction` is exactly 1. Anything less overshoots, and a ribbon that
+springs past its wattage before settling back is drawing a reading the machine
+never had.
+
+The sensors only change about **1.1 times a second** (measured with
+`--sensorrate`: mean 939 ms between changes, never faster than 623 ms), so
+there is no more detail to be had by animating for longer — a slow curve just
+delays the number. The spring settles well inside that gap:
+
+| | old (linear 1.2 s) | now (spring, response 0.42) |
+| --- | --- | --- |
+| 50% of the change | 616 ms | **125 ms** |
+| 90% | 1091 ms | **275 ms** |
+| fully settled | 1199 ms | **467 ms** |
+| overshoot | none | none |
+
 Measured with `--animtest`, which records the value SwiftUI hands the view on
-every animation frame:
+every animation frame — 130 frames at a mean 8.2 ms gap, i.e. 121 fps with no
+dropped frames.
 
-```
-interpolated frames: 148
-span: 1.21 s   87.77 W -> 30.00 W
-mean gap: 8.3 ms  (121 fps)   worst gap: 8.8 ms
-monotonic (no overshoot): true
-```
+**Nothing is published to the panel while it is closed.** An earlier version
+animated for longer than the gap between readings, so a new animation began
+before the last ended and the view never settled; left running behind a closed
+popover that was a permanent 120 fps render loop measuring 21–34% of a core.
+Absurd in an app whose job is watching power, and it inflated the very number on
+screen. It is now a fraction of a percent closed. The first publish on opening
+is wrapped in a transaction with animations disabled, so the panel does not
+lurch from a stale reading to the current one each time it appears.
 
-**Nothing is published to the panel while it is closed.** Because the animation
-runs slightly longer than the gap between readings, a new one starts before the
-last ends and the view never settles — left running behind a closed popover that
-is a permanent 120 fps render loop, which measured 21–34% of a core. Absurd in
-an app whose job is watching power, and it inflated the very number on screen.
-Closed it is now 0.3%; open, about 10%. The first publish on opening is wrapped
-in a transaction with animations disabled, so the panel does not lurch from a
-stale reading to the current one each time it appears.
-
-Note that pixel capture cannot verify this: `cacheDisplay` renders the model
-layer, not the presentation layer, so a screenshot taken mid-animation shows the
-final state. Recording `animatableData` is the way to see it.
+Note that pixel capture cannot verify any of this: `cacheDisplay` renders the
+model layer, not the presentation layer, so a screenshot taken mid-animation
+shows the final state. Recording `animatableData` is the way to see it.
 
 The Sankey labels deliberately do **not** use `.monospacedDigit()`. It stops
 width jitter, but it widened them past the reference; SF Pro's proportional

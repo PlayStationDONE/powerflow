@@ -37,12 +37,42 @@ enum PowerFlowMain {
             app.run()
             return
         }
+        if let i = args.firstIndex(of: "--render-menubar"), i + 1 < args.count {
+            let dir = args[i + 1]
+            let app = NSApplication.shared
+            let d = MenuBarShotDelegate(dir: dir)
+            app.delegate = d
+            app.setActivationPolicy(.accessory)
+            app.run()
+            return
+        }
         if args.contains("--diagnose") {
             let app = NSApplication.shared
             let d = DiagnoseDelegate()
             app.delegate = d
             app.setActivationPolicy(.accessory)
             app.run()
+            return
+        }
+        if args.contains("--sensorrate") {
+            guard let smc = SMCReader() else { print("no SMC"); return }
+            var last: Double = -1
+            var changes: [TimeInterval] = []
+            var lastChange = Date()
+            let start = Date()
+            while Date().timeIntervalSince(start) < 6 {
+                if let v = smc.double("PDTR"), v != last {
+                    if last >= 0 { changes.append(Date().timeIntervalSince(lastChange)) }
+                    lastChange = Date()
+                    last = v
+                }
+                Thread.sleep(forTimeInterval: 0.02)
+            }
+            let avg = changes.isEmpty ? 0 : changes.reduce(0, +) / Double(changes.count)
+            print(String(format: "PDTR changed %d times in 6 s", changes.count))
+            print(String(format: "mean interval between changes: %.0f ms (%.1f Hz)", avg * 1000, 1 / avg))
+            print(String(format: "min %.0f ms   max %.0f ms",
+                         (changes.min() ?? 0) * 1000, (changes.max() ?? 0) * 1000))
             return
         }
         if args.contains("--stability") {
@@ -685,7 +715,66 @@ final class AnimTestDelegate: NSObject, NSApplicationDelegate {
             let vals = s.map { $0.1 }
             let monotonic = zip(vals, vals.dropFirst()).allSatisfy { $1 <= $0 + 0.001 }
             print("monotonic (no overshoot): \(monotonic)")
+            if let first = s.first?.1, let target = s.last?.1 {
+                let total = target - first
+                func timeTo(_ pct: Double) -> String {
+                    guard let hit = s.first(where: { abs($0.1 - first) >= abs(total) * pct })
+                    else { return "n/a" }
+                    return String(format: "%.0f ms", (hit.0 - s[0].0) * 1000)
+                }
+                print("time to 50%: \(timeTo(0.5))   90%: \(timeTo(0.9))   99%: \(timeTo(0.99))")
+            }
             print("first 6:", s.prefix(6).map { String(format: "%.1f", $0.1) }.joined(separator: " "))
+            exit(0)
+        }
+    }
+}
+
+
+/// Renders the real status-item button in each label style.
+///
+/// The menu bar itself cannot be screenshotted without Screen Recording
+/// permission, and on a full menu bar the item is hidden behind the notch
+/// anyway - but the button is a real view and can draw itself.
+@MainActor
+final class MenuBarShotDelegate: NSObject, NSApplicationDelegate {
+    private let dir: String
+    private var item: NSStatusItem!
+    init(dir: String) { self.dir = dir }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        guard let button = item.button else { exit(1) }
+        // The menu bar is dark here, so template art draws light.
+        button.appearance = NSAppearance(named: .darkAqua)
+        button.imagePosition = .imageLeading
+
+        let snapshot = PowerReader().read() ?? .sample
+        let styles: [(String, String)] = [
+            ("iconOnly", ""),
+            ("iconAndPercent", " \(Int(snapshot.percent.rounded()))%"),
+            ("iconAndWatts", String(format: " %.0fW", snapshot.systemLoad)),
+        ]
+        let config = NSImage.SymbolConfiguration(pointSize: 14, weight: .regular)
+        button.image = NSImage(systemSymbolName: "battery.100",
+                               accessibilityDescription: "Battery")?
+            .withSymbolConfiguration(config)
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+            for (name, title) in styles {
+                button.title = title
+                button.sizeToFit()
+                button.layoutSubtreeIfNeeded()
+                button.display()
+                guard let rep = button.bitmapImageRepForCachingDisplay(in: button.bounds)
+                else { continue }
+                button.cacheDisplay(in: button.bounds, to: rep)
+                if let png = rep.representation(using: .png, properties: [:]) {
+                    try? png.write(to: URL(fileURLWithPath: "\(self.dir)/menubar-\(name).png"))
+                }
+                print(String(format: "%@: %.0f x %.0f pt", name,
+                             button.bounds.width, button.bounds.height))
+            }
             exit(0)
         }
     }
