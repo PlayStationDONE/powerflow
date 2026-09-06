@@ -121,30 +121,67 @@ public final class SMCReader {
     }
 
     private static func decode(_ out: inout ParamStruct, type: UInt32, size: Int) -> Double? {
-        withUnsafeBytes(of: &out.bytes) { raw -> Double? in
+        let bytes: [UInt8] = withUnsafeBytes(of: &out.bytes) { raw in
             let b = raw.bindMemory(to: UInt8.self)
-            switch typeName(type) {
-            case "flt ":
-                guard size >= 4 else { return nil }
-                let bits = UInt32(b[0]) | UInt32(b[1]) << 8 | UInt32(b[2]) << 16 | UInt32(b[3]) << 24
-                return Double(Float(bitPattern: bits))
-            case "ui8 ":
-                return Double(b[0])
-            case "ui16":
-                guard size >= 2 else { return nil }
-                return Double(UInt16(b[0]) | UInt16(b[1]) << 8)
-            case "si16":
-                guard size >= 2 else { return nil }
-                return Double(Int16(bitPattern: UInt16(b[0]) | UInt16(b[1]) << 8))
-            case "ui32":
-                return Double(UInt32(b[0]) << 24 | UInt32(b[1]) << 16 | UInt32(b[2]) << 8 | UInt32(b[3]))
-            case "sp78":
-                // Signed fixed point, 7 integer bits and 8 fractional.
-                let raw = Int16(bitPattern: UInt16(b[0]) << 8 | UInt16(b[1]))
-                return Double(raw) / 256
-            default:
-                return nil
-            }
+            return (0..<min(size, 32)).map { b[$0] }
+        }
+        return decode(bytes: bytes, type: typeName(type))
+    }
+
+    /// Decodes one SMC payload.
+    ///
+    /// Split out as a pure function partly so it can be tested, and partly
+    /// because the chained shift-and-or expressions it replaces took the
+    /// type checker past its limit on some toolchains. Each step is now
+    /// explicitly typed.
+    ///
+    /// Integer types are **little-endian** on Apple silicon, established by
+    /// cross-checking two keys against IORegistry: `B0AV` reads 13227 mV that
+    /// way against a pack voltage of 13228, and `B0CT` reads 23 against a cycle
+    /// count of 23. Big-endian gives nonsense for both.
+    static func decode(bytes b: [UInt8], type: String) -> Double? {
+        switch type {
+        case "flt ":
+            guard b.count >= 4 else { return nil }
+            var bits = UInt32(b[3])
+            bits = (bits << 8) | UInt32(b[2])
+            bits = (bits << 8) | UInt32(b[1])
+            bits = (bits << 8) | UInt32(b[0])
+            return Double(Float(bitPattern: bits))
+
+        case "ui8 ":
+            guard let first = b.first else { return nil }
+            return Double(first)
+
+        case "ui16":
+            guard b.count >= 2 else { return nil }
+            let low = UInt16(b[0])
+            let high = UInt16(b[1]) << 8
+            return Double(low | high)
+
+        case "si16":
+            guard b.count >= 2 else { return nil }
+            let low = UInt16(b[0])
+            let high = UInt16(b[1]) << 8
+            return Double(Int16(bitPattern: low | high))
+
+        case "ui32":
+            guard b.count >= 4 else { return nil }
+            var value = UInt32(b[3])
+            value = (value << 8) | UInt32(b[2])
+            value = (value << 8) | UInt32(b[1])
+            value = (value << 8) | UInt32(b[0])
+            return Double(value)
+
+        case "sp78":
+            // Signed fixed point, big-endian: 7 integer bits and 8 fractional.
+            guard b.count >= 2 else { return nil }
+            let high = UInt16(b[0]) << 8
+            let raw = Int16(bitPattern: high | UInt16(b[1]))
+            return Double(raw) / 256
+
+        default:
+            return nil
         }
     }
 
