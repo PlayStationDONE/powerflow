@@ -1,5 +1,7 @@
 # PowerFlow
 
+[![CI](https://github.com/dylansantwani/powerflow/actions/workflows/ci.yml/badge.svg)](https://github.com/dylansantwani/powerflow/actions/workflows/ci.yml)
+
 Live power-flow monitor for the macOS menu bar. It shows what the adapter is
 delivering, what the battery is giving or taking and what the machine is
 actually burning — as a Sankey diagram whose ribbon thicknesses *are* the
