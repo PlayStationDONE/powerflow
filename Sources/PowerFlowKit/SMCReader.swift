@@ -5,13 +5,15 @@ import IOKit
 ///
 /// `AppleSmartBattery` only republishes about once a minute, which is far too
 /// slow for a live diagram. The SMC exposes the same three figures as float
-/// sensors that update roughly every second:
+/// sensors that update roughly every second. The keys this app actually reads
+/// (names are Apple-internal and undocumented):
 ///
 ///   * `PDTR` - power delivered in from the adapter
-///   * `PPBR` - battery power, positive into the pack
-///   * `PSTR` - total system power
+///   * `B0AC` / `B0AV` - pack current (mA) and voltage (mV), giving battery power
+///   * `PSTR` - whole-system power, used only as a cross-check
 ///
-/// This opens the SMC user client for reading only. It never writes a key.
+/// This opens the SMC user client for reading only: the only selectors ever
+/// issued are "read key info" (9) and "read bytes" (5). It never writes a key.
 public final class SMCReader {
     private var connection: io_connect_t = 0
 

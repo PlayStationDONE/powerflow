@@ -160,7 +160,9 @@ public struct SmartBatteryReader {
             temperature: temperature,
             timeRemaining: remaining,
             remainingWh: remainingWh,
-            fullWh: fullWh
+            fullWh: fullWh,
+            smcSystemTotal: smc?.systemTotal,
+            dataSource: smc != nil ? .smc : .registry
         )
     }
 

@@ -61,7 +61,7 @@ struct AppDrawList: View {
     /// The remainder is the number people most often misread, so say plainly
     /// what is in it.
     static let systemRowExplanation = """
-        The display, GPU, and everything the kernel does not bill to one of         your apps. WindowServer is the big one: it runs as a system user, so         its power cannot be read or charged to the app that caused it, even         though app drawing is what keeps it busy. Not an idle figure.
+        System load minus the app energy above (a residual, not a measurement). It holds the display, GPU, WindowServer and other root-owned processes, and the roughly half of app power the kernel does not bill to any task. Not an idle figure.
         """
 
     private var maxAppWatts: Double {
@@ -75,11 +75,25 @@ struct AppDrawList: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: s(Ref.rowGap)) {
-            Text("DRAW BY APP")
-                .font(.system(size: s(Ref.sectionFontSize), weight: .semibold))
-                .tracking(s(Ref.sectionTracking))
-                .foregroundStyle(Palette.muted)
-                .padding(.bottom, s(Ref.sectionRowGap - Ref.rowGap))
+            HStack {
+                Text("APP ENERGY (ESTIMATED)")
+                    .font(.system(size: s(Ref.sectionFontSize), weight: .semibold))
+                    .tracking(s(Ref.sectionTracking))
+                    .foregroundStyle(Palette.muted)
+                Spacer(minLength: 0)
+                Button {
+                    NotificationCenter.default.post(name: .openDashboardRequested, object: nil)
+                } label: {
+                    Image(systemName: "chart.xyaxis.line")
+                        .font(.system(size: s(Ref.sectionFontSize) * 1.3, weight: .medium))
+                        .foregroundStyle(Palette.muted)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Open the PowerFlow dashboard")
+                .accessibilityLabel("Open dashboard")
+            }
+            .padding(.bottom, s(Ref.sectionRowGap - Ref.rowGap))
 
             VStack(alignment: .leading, spacing: s(Ref.rowGap)) {
                 ForEach(rows) { row in
@@ -129,7 +143,7 @@ struct AppDrawList: View {
         }
         .padding(.horizontal, s(Ref.rowInset))
         .frame(width: s(Ref.contentWidth), height: s(Ref.rowHeight))
-        .help(row.isSystem ? Self.systemRowExplanation : "\(row.name) — CPU energy attributed to this app by the kernel")
+        .help(row.isSystem ? Self.systemRowExplanation : "\(row.name) — estimate: CPU energy the kernel attributes to this app, not a power measurement")
         .background(alignment: .leading) {
             ZStack(alignment: .leading) {
                 RoundedRectangle(cornerRadius: radius, style: .continuous)

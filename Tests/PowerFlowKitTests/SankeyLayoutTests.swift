@@ -1,5 +1,5 @@
 import CoreGraphics
-import XCTest
+import Testing
 @testable import PowerFlowKit
 
 /// The layout is pinned to the reference screenshot. Its content box is
@@ -16,12 +16,12 @@ private func node(_ l: SankeyLayout, _ kind: SankeyNodeKind, source: Bool) -> Sa
     l.nodes.first { $0.kind == kind && $0.isSource == source }
 }
 
-final class SankeyLayoutTests: XCTestCase {
+@Suite struct SankeyLayoutTests {
 
     // MARK: reference geometry
 
     /// Every frame below was measured off the screenshot with a pixel scan.
-    func testReferenceLayoutReproducesTheScreenshot() {
+    @Test func testReferenceLayoutReproducesTheScreenshot() {
         let l = layout(.sample)
         let tolerance: CGFloat = 3
 
@@ -51,7 +51,7 @@ final class SankeyLayoutTests: XCTestCase {
 
     /// The screenshot's ribbons measured 315px and 59px thick for 87.77 W and
     /// 16.92 W, i.e. a shared scale of about 3.6 px per watt.
-    func testRibbonThicknessIsProportionalToWatts() {
+    @Test func testRibbonThicknessIsProportionalToWatts() {
         let l = layout(.sample)
         XCTAssertEqual(l.scale, 3.639, accuracy: 0.02)
 
@@ -66,7 +66,7 @@ final class SankeyLayoutTests: XCTestCase {
 
     /// The busier column fills the available height exactly once its padding
     /// is accounted for; that is what fixes the scale.
-    func testBusiestColumnFillsTheHeight() {
+    @Test func testBusiestColumnFillsTheHeight() {
         let l = layout(.sample)
         let sources = l.nodes.filter(\.isSource)
         let top = sources.map(\.frame.minY).min()!
@@ -76,7 +76,7 @@ final class SankeyLayoutTests: XCTestCase {
     }
 
     /// The single node on the right is centred on the same axis.
-    func testSingleSinkIsVerticallyCentred() {
+    @Test func testSingleSinkIsVerticallyCentred() {
         let l = layout(.sample)
         let system = node(l, .system, source: false)!
         XCTAssertEqual(system.frame.midY, referenceRect.midY, accuracy: 0.5)
@@ -84,7 +84,7 @@ final class SankeyLayoutTests: XCTestCase {
 
     /// A node's height is its wattage, so the machine's card equals the two
     /// ribbons feeding it stacked together.
-    func testSinkHeightEqualsSumOfItsInputs() {
+    @Test func testSinkHeightEqualsSumOfItsInputs() {
         let l = layout(.sample)
         let system = node(l, .system, source: false)!
         let inputs = l.links.reduce(0) { $0 + ($1.endY.upperBound - $1.endY.lowerBound) }
@@ -95,7 +95,7 @@ final class SankeyLayoutTests: XCTestCase {
 
     /// Charging moves the battery to the sink column: the wall feeds both the
     /// machine and the pack.
-    func testChargingPutsTheBatteryOnTheRight() {
+    @Test func testChargingPutsTheBatteryOnTheRight() {
         let s = PowerSnapshot(
             percent: 40, externalConnected: true, isCharging: true,
             adapterPower: 60, batteryPower: 25, systemLoad: 35
@@ -109,7 +109,7 @@ final class SankeyLayoutTests: XCTestCase {
     }
 
     /// Unplugged there is one source, one sink and one full-height ribbon.
-    func testOnBatteryIsOneFullHeightRibbon() {
+    @Test func testOnBatteryIsOneFullHeightRibbon() {
         let s = PowerSnapshot(
             percent: 55, externalConnected: false,
             adapterPower: 0, batteryPower: -14.5, systemLoad: 14.5
@@ -124,7 +124,7 @@ final class SankeyLayoutTests: XCTestCase {
 
     /// On AC with a full battery the diagram is a single adapter-to-machine
     /// ribbon; the battery card is not drawn at all.
-    func testIdleOnACHasNoBatteryNode() {
+    @Test func testIdleOnACHasNoBatteryNode() {
         let s = PowerSnapshot(
             percent: 100, externalConnected: true, fullyCharged: true,
             adapterPower: 19, batteryPower: 0, systemLoad: 19
@@ -137,7 +137,7 @@ final class SankeyLayoutTests: XCTestCase {
 
     /// Ribbons must not cross: the adapter's share of the machine sits above
     /// the battery's, matching the order of the source column.
-    func testRibbonsDoNotCross() {
+    @Test func testRibbonsDoNotCross() {
         let l = layout(.sample)
         let fromAdapter = l.links.first { $0.from == .adapter }!
         let fromBattery = l.links.first { $0.from == .battery }!
@@ -145,14 +145,14 @@ final class SankeyLayoutTests: XCTestCase {
         XCTAssertLessThanOrEqual(fromAdapter.endY.upperBound, fromBattery.endY.lowerBound + 0.001)
     }
 
-    func testNoFlowProducesNothingToDraw() {
+    @Test func testNoFlowProducesNothingToDraw() {
         let l = layout(PowerSnapshot())
         XCTAssertTrue(l.nodes.isEmpty)
         XCTAssertTrue(l.links.isEmpty)
     }
 
     /// The ribbon outline starts and ends at the node edges it connects.
-    func testLinkPathSpansTheRibbon() {
+    @Test func testLinkPathSpansTheRibbon() {
         let l = layout(.sample)
         let box = l.links[0].path().boundingBoxOfPath
         XCTAssertEqual(box.minX, l.links[0].xRange.lowerBound, accuracy: 0.5)
@@ -160,7 +160,7 @@ final class SankeyLayoutTests: XCTestCase {
     }
 
     /// Scaling the panel must not change any proportion.
-    func testLayoutIsScaleInvariant() {
+    @Test func testLayoutIsScaleInvariant() {
         let half = SankeyLayout.make(
             for: .sample,
             in: CGRect(x: 0, y: 0, width: referenceRect.width / 2, height: referenceRect.height / 2),

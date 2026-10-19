@@ -61,7 +61,11 @@ def draw(size):
 
 def main():
     out = sys.argv[1] if len(sys.argv) > 1 else "AppIcon.icns"
-    iconset = out.replace(".icns", ".iconset")
+    # The scratch directory is deleted at the end, so it must never be able to
+    # coincide with the output path.
+    if not out.endswith(".icns"):
+        sys.exit("output path must end in .icns")
+    iconset = out[: -len(".icns")] + ".iconset"
     os.makedirs(iconset, exist_ok=True)
     for px, names in [(16, ["16x16"]), (32, ["16x16@2x", "32x32"]), (64, ["32x32@2x"]),
                       (128, ["128x128"]), (256, ["128x128@2x", "256x256"]),

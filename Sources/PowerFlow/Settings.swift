@@ -52,9 +52,26 @@ final class Settings: ObservableObject {
         didSet { defaults.set(menuBarStyle.rawValue, forKey: "menuBarStyle") }
     }
 
+    /// Whether power history is written to disk. On by default; turning it off
+    /// stops new rows but keeps what is already stored until deleted.
+    @Published var recordHistory: Bool {
+        didSet { defaults.set(recordHistory, forKey: "recordHistory") }
+    }
+
+    /// True: a normal app with a Dock tile and the dashboard window, plus the
+    /// menu-bar item. False: menu-bar only.
+    static var showInDockDefault: Bool {
+        (UserDefaults.standard.object(forKey: "showInDock") as? Bool) ?? true
+    }
+    @Published var showInDock: Bool {
+        didSet { defaults.set(showInDock, forKey: "showInDock") }
+    }
+
     private let defaults = UserDefaults.standard
 
     private init() {
+        showInDock = Settings.showInDockDefault
+        recordHistory = (UserDefaults.standard.object(forKey: "recordHistory") as? Bool) ?? true
         let t = defaults.double(forKey: "chargeTarget")
         let f = defaults.double(forKey: "resumeFloor")
         chargeTarget = t > 0 ? t : 0.80

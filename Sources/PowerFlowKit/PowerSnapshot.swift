@@ -49,6 +49,12 @@ public struct PowerSnapshot: Equatable, Sendable {
     /// Energy the pack holds when full, in watt-hours.
     public var fullWh: Double?
 
+    /// Independent whole-system figure from SMC `PSTR`, when present. Shown only
+    /// as a cross-check against `systemLoad`, which is derived.
+    public var smcSystemTotal: Double?
+    /// Which source the three flow figures came from.
+    public var dataSource: PowerDataSource
+
     public init(
         percent: Double = 0,
         externalConnected: Bool = false,
@@ -65,7 +71,9 @@ public struct PowerSnapshot: Equatable, Sendable {
         temperature: Double? = nil,
         timeRemaining: Int? = nil,
         remainingWh: Double? = nil,
-        fullWh: Double? = nil
+        fullWh: Double? = nil,
+        smcSystemTotal: Double? = nil,
+        dataSource: PowerDataSource = .registry
     ) {
         self.percent = percent
         self.externalConnected = externalConnected
@@ -83,6 +91,8 @@ public struct PowerSnapshot: Equatable, Sendable {
         self.timeRemaining = timeRemaining
         self.remainingWh = remainingWh
         self.fullWh = fullWh
+        self.smcSystemTotal = smcSystemTotal
+        self.dataSource = dataSource
     }
 
     /// Watts leaving the battery (0 while charging).

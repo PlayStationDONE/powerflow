@@ -14,10 +14,14 @@ public struct SMCPower: Equatable, Sendable {
     /// the same sign convention, but it updates every second instead of every
     /// minute.
     public var battery: Double
+    /// `PSTR` - an independently sampled whole-system figure, kept only as a
+    /// cross-check. Nil when the key is absent or implausible.
+    public var systemTotal: Double?
 
-    public init(adapter: Double, battery: Double) {
+    public init(adapter: Double, battery: Double, systemTotal: Double? = nil) {
         self.adapter = adapter
         self.battery = battery
+        self.systemTotal = systemTotal
     }
 }
 
@@ -99,7 +103,13 @@ public final class PowerReader {
             return nil
         }
         failures = 0
-        return SMCPower(adapter: adapter, battery: millivolts / 1000 * milliamps / 1000)
+        var total = smc.double("PSTR")
+        if let t = total, !(t.isFinite && t >= 0 && t < 500) { total = nil }
+        return SMCPower(
+            adapter: adapter,
+            battery: millivolts / 1000 * milliamps / 1000,
+            systemTotal: total
+        )
     }
 
     public static func readPowerSources() -> PowerSourceState? {

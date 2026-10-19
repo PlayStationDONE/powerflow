@@ -34,6 +34,29 @@ final class PowerMonitor: ObservableObject {
     @Published private(set) var panelRows: [DrawRow] = []
     @Published private(set) var panelRuntime: String?
 
+    /// SoC block power from IOReport, when those counters are advancing.
+    @Published private(set) var components: ComponentPower = .none
+    /// When the last successful reading arrived, for a freshness readout.
+    @Published private(set) var lastReading: Date?
+    /// Statistics over `recent`, recomputed once per recorded sample rather than
+    /// on every view update.
+    @Published private(set) var sessionStats = PowerStatistics()
+    /// Bumps each time a history sample is recorded; views observe it to
+    /// redraw charts without republishing the whole sample array.
+    @Published private(set) var historyRevision = 0
+    /// Raw recorded samples for this run, newest last, bounded.
+    private(set) var recent: [HistorySample] = []
+    private let recentLimit = 20_000
+    /// Seconds between recorded samples. The SMC changes about once a second;
+    /// five is plenty for trends and keeps disk writes rare.
+    static let recordInterval: TimeInterval = 5
+
+    let history = HistoryStore()
+    private let componentReader = ComponentEnergyReader()
+    private var lastRecorded: Date?
+    private var wakeObserver: NSObjectProtocol?
+    private var sleepObserver: NSObjectProtocol?
+
     /// Set by the popover when it opens and closes.
     var isPanelVisible = false {
         didSet {
@@ -73,6 +96,7 @@ final class PowerMonitor: ObservableObject {
     private let alpha = 0.35
 
     init(startPolling: Bool = true) {
+        if startPolling { history.prune() }
         refresh()
         guard startPolling else { return }
         let t = Timer(timeInterval: Motion.sampleInterval, repeats: true) { [weak self] _ in
@@ -91,11 +115,38 @@ final class PowerMonitor: ObservableObject {
         // Waking is the one moment everything is guaranteed stale: the SMC
         // connection may be dead, the readings are minutes old, and the load
         // average describes a machine that was asleep.
-        NSWorkspace.shared.notificationCenter.addObserver(
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
         ) { [weak self] _ in
             Task { @MainActor in self?.handleWake() }
         }
+        // Nothing is sampled while asleep; make sure what was recorded before
+        // the lid closed is on disk.
+        sleepObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.willSleepNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.history.flush() }
+        }
+    }
+
+    /// Deletes stored history and the in-memory copy. Only the history file
+    /// is touched.
+    func deleteHistory() throws {
+        try history.deleteAll()
+        recent.removeAll()
+        lastRecorded = nil
+        sessionStats = PowerStatistics()
+        historyRevision &+= 1
+    }
+
+    /// Stops sampling and writes buffered history. Called on quit.
+    func shutdown() {
+        timer?.invalidate(); timer = nil
+        appTimer?.invalidate(); appTimer = nil
+        if let wakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver) }
+        if let sleepObserver { NSWorkspace.shared.notificationCenter.removeObserver(sleepObserver) }
+        wakeObserver = nil; sleepObserver = nil
+        history.flush()
     }
 
 
@@ -104,7 +155,9 @@ final class PowerMonitor: ObservableObject {
         smoothed = nil          // do not glide out of a stale reading
         loadAverage = LoadAverager(window: 60)
         appSmoothed.removeAll()
-        _ = energy.sample(appNames: RunningApps.names())
+        componentReader?.reset()
+        lastRecorded = nil
+        appQueue.async { [energy] in _ = energy.sample(appNames: [:]) }
         refresh()
     }
 
@@ -113,11 +166,31 @@ final class PowerMonitor: ObservableObject {
         appTimer?.invalidate()
     }
 
+    /// Enumerating every process is the heaviest thing the app does, so it
+    /// runs off the main thread. `AppEnergySampler` is only ever touched from
+    /// this serial queue after init.
+    private let appQueue = DispatchQueue(label: "powerflow.app-energy", qos: .utility)
+    private var appSampleInFlight = false
+
     /// Rebuilds the per-app rows: the heaviest applications, then everything
     /// the kernel does not attribute to one - display, GPU, background daemons
     /// and the idle floor - so the column accounts for the whole system load.
     func refreshApps() {
-        let measured = energy.sample(appNames: RunningApps.names())
+        guard !appSampleInFlight else { return }
+        appSampleInFlight = true
+        let names = RunningApps.names()
+        appQueue.async { [energy] in
+            let measured = energy.sample(appNames: names)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    self.appSampleInFlight = false
+                    self.applyApps(measured)
+                }
+            }
+        }
+    }
+
+    private func applyApps(_ measured: [AppPower]) {
         guard !measured.isEmpty else { return }
 
         var seen = Set<Int32>()
@@ -140,7 +213,7 @@ final class PowerMonitor: ObservableObject {
         }
         let attributed = smoothedRows.reduce(0) { $0 + $1.watts }
         let remainder = max(0, snapshot.systemLoad - attributed)
-        out.append(DrawRow(id: -1, name: "System & display", watts: remainder,
+        out.append(DrawRow(id: -1, name: "Not attributed (residual)", watts: remainder,
                            icon: nil, isSystem: true))
         rows = out
         if isPanelVisible { panelRows = out }
@@ -152,7 +225,16 @@ final class PowerMonitor: ObservableObject {
             return
         }
         hasBattery = true
+        let raw = fresh
         fresh = SampleGuard.reconcile(fresh, previous: snapshot)
+        // The guard swaps in the previous reading when a sensor drops out. That
+        // is right for a steady diagram but must not be logged as a
+        // measurement, so such ticks are recorded as missing.
+        let guardSubstituted = fresh.adapterPower != raw.adapterPower
+            || fresh.batteryPower != raw.batteryPower || fresh.systemLoad != raw.systemLoad
+        lastReading = Date()
+        components = componentReader?.sample() ?? .none
+        recordHistory(raw, substituted: guardSubstituted)
 
         if let prev = smoothed {
             fresh.adapterPower = blend(prev.adapter, fresh.adapterPower)
@@ -168,6 +250,29 @@ final class PowerMonitor: ObservableObject {
             load: loadAverage.average ?? fresh.systemLoad
         ))
         if isPanelVisible { publishToPanel() }
+    }
+
+    private func recordHistory(_ raw: PowerSnapshot, substituted: Bool, now: Date = Date()) {
+        guard Settings.shared.recordHistory else { return }
+        if let last = lastRecorded, now.timeIntervalSince(last) < Self.recordInterval { return }
+        lastRecorded = now
+        let sample = HistorySample(
+            timestamp: now,
+            percent: raw.percent,
+            externalConnected: raw.externalConnected,
+            isCharging: raw.isCharging,
+            adapterWatts: substituted ? nil : raw.adapterPower,
+            batteryWatts: substituted ? nil : raw.batteryPower,
+            systemLoadWatts: substituted ? nil : raw.systemLoad,
+            smcSystemTotalWatts: raw.smcSystemTotal,
+            gpuWatts: components.gpu,
+            source: raw.dataSource
+        )
+        history.append(sample)
+        recent.append(sample)
+        if recent.count > recentLimit { recent.removeFirst(recent.count - recentLimit) }
+        sessionStats = PowerStatistics.compute(recent)
+        historyRevision &+= 1
     }
 
     private func blend(_ old: Double, _ new: Double) -> Double {

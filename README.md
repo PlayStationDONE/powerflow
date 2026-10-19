@@ -1,6 +1,13 @@
 # PowerFlow
 
-[![CI](https://github.com/dylansantwani/powerflow/actions/workflows/ci.yml/badge.svg)](https://github.com/dylansantwani/powerflow/actions/workflows/ci.yml)
+> **Based on [dylansantwani/powerflow](https://github.com/dylansantwani/powerflow)** by Dylan
+> (MIT). This fork adds a dashboard window, local history with CSV export, GPU power,
+> measurement provenance labels, an app icon, a Dock/desktop mode, and security and
+> measurement audits. The original menu-bar panel, SMC reader and Sankey layout are
+> Dylan's work. The app icon artwork was AI-generated. See [AUDIT_REPORT.md](AUDIT_REPORT.md)
+> for exactly what changed.
+
+[![CI](https://github.com/PlayStationONE/powerflow/actions/workflows/ci.yml/badge.svg)](https://github.com/PlayStationONE/powerflow/actions/workflows/ci.yml)
 
 Live power-flow monitor for the macOS menu bar. It shows what the adapter is
 delivering, what the battery is giving or taking and what the machine is
@@ -21,13 +28,30 @@ the number on it.
   SMC sensors that update about once a second. The three always balance.
 - **Runtime if you unplug.** Remaining pack energy over the averaged load —
   the same question whether or not a cable is attached.
-- **Draw by app.** Per-app wattage from the kernel's own energy accounting, with
+- **Draw by app (estimate).** Per-app wattage estimated from the kernel's own energy accounting, with
   helper processes folded into the app that spawned them, and everything not
   attributable to an app shown honestly as a system remainder.
 - **Charge markers.** A draggable target and floor that tell you when your
   charge crosses them. They do *not* change how the Mac charges — see below.
 - **Menu bar or hotkey.** ⌥⌘P opens the panel even when the menu bar is too
   full to show the icon.
+- **Dashboard window.** Right-click the menu-bar item › *Open Dashboard…* (⌘D), or click the
+  chart icon in the panel. *Live* shows every metric with a Direct / Calculated / Estimated /
+  Unavailable badge, GPU power where the Mac exposes it, session statistics and the flow
+  diagram. *History* charts the last 15 minutes to 7 days with gaps left blank. *Apps* and
+  *Sources* explain the estimates and where each figure comes from. Cards use Liquid Glass on
+  macOS 26 or later, a system material on macOS 14–15, and an opaque colour under Reduce
+  Transparency.
+- **History, export, delete.** A sample every 5 s is kept for 7 days in
+  `~/Library/Application Support/PowerFlow/history.csv` (private to your user). Export it as
+  CSV for Excel or Power BI, or delete it, from the dashboard or the right-click menu.
+  Recording can be turned off. Nothing is uploaded.
+
+**What is and is not measured.** See [docs/MEASUREMENT_METHODOLOGY.md](docs/MEASUREMENT_METHODOLOGY.md).
+In short: adapter input is the DC-side power the adapter delivers (not wall power); battery
+power and system load are calculated; per-app watts are an estimate; CPU, Neural Engine, memory
+and total SoC power and wall power are **not available** on an M1 Pro without root and are
+not invented. There is no desktop widget (needs Xcode; see [AUDIT_REPORT.md](AUDIT_REPORT.md)).
 
 The diagram adapts to what the battery is doing: a source while discharging, a
 sink while charging, absent when idle.
@@ -39,11 +63,14 @@ sink while charging, absent when idle.
 - macOS 14 or later
 - Apple silicon for live wattage. Intel Macs fall back to the slower
   IORegistry figures, which still work but refresh about once a minute.
-- Xcode command line tools to build. `scripts/make-icon.py` needs Pillow; the
-  build skips the icon if it is missing.
+- Xcode or the command line tools to build. With the command line tools only, the macOS 27
+  SDK cannot expand SwiftUI's `@State` macro; `./build.sh` detects the failure and retries
+  with the newest installed macOS 26 SDK (override with `POWERFLOW_SDK=/path/to.sdk`). The app icon is `Resources/AppIcon.icns`
+  (committed); `scripts/make-icon.py` (needs Pillow) is only a fallback.
 
 Everything is read-only and local: the app opens the SMC user client for
-reading, never writes a key, and makes no network connections.
+reading, never writes a key, and makes no network connections. The only file it
+writes is its own history log (see above).
 
 On a Mac with no battery the panel says so rather than drawing an empty frame.
 On wake the SMC connection is re-opened and the smoothing, load average and
@@ -102,7 +129,9 @@ Three sources, each used for what it is actually good at:
 | **SMC** (`PDTR`, `B0AC`, `B0AV`) | adapter watts, battery current and voltage | ~1 s |
 | **IOPowerSources** | charge %, cable state, charging, time remaining | on change |
 | **`AppleSmartBattery`** | health, cycles, temperature, adapter identity, pack capacity | ~60 s |
-| **`proc_pid_rusage`** | per-process energy for the app list | 3 s |
+| **`proc_pid_rusage`** | per-process energy for the app list (an estimate) | 3 s |
+| **IOReport** (Energy Model) | GPU power, when its counter advances | 1 s |
+| **SMC `PSTR`** | cross-check of the derived system load | ~1 s |
 
 The obvious approach — read `AppleSmartBattery`'s `PowerTelemetryData` — turns
 out to republish only about **once a minute**, which is useless for a live
@@ -143,7 +172,7 @@ memory and regulator losses that a higher clock induces but which are not billed
 to any one task. At idle the apps account for 10–25% of system draw.
 
 So the list does not pretend apps sum to the wall figure. Whatever is not
-attributable to an app is shown as a **System & display** row, and it is usually
+attributable to an app is shown as a **Not attributed (residual)** row, and it is usually
 the largest number on screen.
 
 **That row is not an idle figure**, which is the easiest thing to misread about
@@ -198,7 +227,9 @@ and the proportions hold at any panel size. Where this file says "the reference"
 that is what it means.
 
 ```bash
-swift test                                  # 28 tests, no hardware needed
+swift test                                  # 91 tests, no hardware needed
+swift test --sdk /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk   # command-line-tools-only Macs
+.build/release/PowerFlow --dashboard        # launch with the dashboard window open
 ./build.sh                                  # bundle without installing
 
 .build/release/PowerFlow --probe            # current reading, balance check, runtime
@@ -291,6 +322,13 @@ measurements are asserted directly in tests:
   charging, absent when idle.
 - Ribbons leave each node top-down so they never cross.
 
+### Tests without Xcode
+
+XCTest ships with Xcode, not with the command line tools, so the test files use Swift
+Testing with a small XCTest-compatible assertion shim (`Tests/PowerFlowKitTests/XCTestShim.swift`).
+On a command-line-tools-only machine the Swift Testing macro plugin occasionally fails to
+load on an incremental build; run the command again.
+
 ### Layout of the source
 
 ```
@@ -304,6 +342,9 @@ Sources/PowerFlowKit/     no UI, fully tested
   AppEnergySampler.swift  per-process energy, folded into per-app watts
   RuntimeEstimate.swift   runtime left, and the rolling load average
   SampleGuard.swift       rejects readings that cannot be true
+  MeasurementKind.swift   Direct / Calculated / Estimated / Unavailable, and the metric catalogue
+  ComponentEnergy.swift   unprivileged IOReport GPU/CPU/ANE/DRAM energy, with counter gating
+  HistoryStore.swift      CSV log, export, retention, gap-aware series, statistics
   Format.swift            "87.77 W" on ribbons, "104W" on the machine's card
 Sources/PowerFlow/        the app
   Spec.swift              every measured constant, in reference pixels
@@ -314,6 +355,8 @@ Sources/PowerFlow/        the app
   PanelView.swift         the popover
   Settings.swift          markers, notifications, launch at login, label style
   Hotkey.swift            global ⌥⌘P, and the off-screen popover anchor
+  DashboardView.swift     Live / History / Apps / Sources, Liquid Glass surfaces
+  DashboardWindow.swift   the dashboard's NSWindow and activation policy
   App.swift               status item, popover, render/probe modes
 ```
 
@@ -326,6 +369,19 @@ Sources/PowerFlow/        the app
 - **Text width** differs by 3–5% at identical cap heights, which is font
   rendering, not layout. Sub-pixel at the panel's real size.
 - The screenshot is cropped ~6px off-centre; PowerFlow uses symmetric padding.
+
+## Reports
+
+* [AUDIT_REPORT.md](AUDIT_REPORT.md) – feature inventory and status
+* [SECURITY_AUDIT.md](SECURITY_AUDIT.md) – findings and what was verified
+* [docs/MEASUREMENT_METHODOLOGY.md](docs/MEASUREMENT_METHODOLOGY.md) – every metric's source and limits, CSV columns
+* [docs/FEATURE_VERIFICATION.md](docs/FEATURE_VERIFICATION.md) – what was tested and on what
+
+## Known limitations
+
+The menu-bar item shows the PowerFlow glyph (`Resources/MenuBarIcon@2x.png`, a template image) instead of a battery symbol, so charge level is not visible in the icon (use the percentage option or the tooltip). No widget, no CPU/ANE/memory/total-SoC/wall power on an M1 Pro,
+per-app figures are estimates, the SMC and IOReport interfaces are undocumented and may change,
+and the build is ad-hoc signed (not notarised).
 
 ## License
 

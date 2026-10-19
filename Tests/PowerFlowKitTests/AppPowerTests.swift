@@ -1,4 +1,4 @@
-import XCTest
+import Testing
 @testable import PowerFlowKit
 
 private func sample(_ pid: Int32, _ ppid: Int32, _ name: String, _ nj: UInt64) -> ProcessSample {
@@ -9,10 +9,10 @@ private func index(_ s: [ProcessSample]) -> [Int32: ProcessSample] {
     Dictionary(uniqueKeysWithValues: s.map { ($0.pid, $0) })
 }
 
-final class AppPowerAggregatorTests: XCTestCase {
+@Suite struct AppPowerAggregatorTests {
 
     /// A joule per second is a watt; the interval must actually divide.
-    func testWattsAreEnergyOverTime() {
+    @Test func testWattsAreEnergyOverTime() {
         let before = index([sample(10, 1, "App", 0)])
         let after = [sample(10, 1, "App", 4_000_000_000)]   // 4 J
         let rows = AppPowerAggregator.aggregate(previous: before, current: after, interval: 2)
@@ -22,7 +22,7 @@ final class AppPowerAggregatorTests: XCTestCase {
 
     /// A browser's helpers must land on the browser, not bury everything else
     /// under twenty anonymous rows.
-    func testHelpersFoldIntoTheOwningApp() {
+    @Test func testHelpersFoldIntoTheOwningApp() {
         let before = index([
             sample(10, 1, "Google Chrome", 0),
             sample(11, 10, "Google Chrome Helper", 0),
@@ -48,7 +48,7 @@ final class AppPowerAggregatorTests: XCTestCase {
     }
 
     /// Heaviest first, because only the top few are shown.
-    func testSortedByWattsDescending() {
+    @Test func testSortedByWattsDescending() {
         let before = index([sample(1, 1, "A", 0), sample(2, 1, "B", 0), sample(3, 1, "C", 0)])
         let after = [
             sample(1, 1, "A", 1_000_000_000),
@@ -61,7 +61,7 @@ final class AppPowerAggregatorTests: XCTestCase {
 
     /// A recycled pid can present a counter lower than last time; treating that
     /// as a huge unsigned delta would invent an enormous phantom consumer.
-    func testCounterGoingBackwardsIsIgnored() {
+    @Test func testCounterGoingBackwardsIsIgnored() {
         let before = index([sample(10, 1, "App", 5_000_000_000)])
         let after = [sample(10, 1, "App", 1_000_000_000)]
         let rows = AppPowerAggregator.aggregate(previous: before, current: after, interval: 1)
@@ -69,21 +69,21 @@ final class AppPowerAggregatorTests: XCTestCase {
     }
 
     /// A process first seen in this sample has no baseline to subtract.
-    func testProcessWithNoPreviousSampleIsSkipped() {
+    @Test func testProcessWithNoPreviousSampleIsSkipped() {
         let rows = AppPowerAggregator.aggregate(
             previous: [:], current: [sample(10, 1, "New", 9_000_000_000)], interval: 1
         )
         XCTAssertTrue(rows.isEmpty)
     }
 
-    func testZeroIntervalProducesNothing() {
+    @Test func testZeroIntervalProducesNothing() {
         let before = index([sample(10, 1, "App", 0)])
         let after = [sample(10, 1, "App", 1_000_000_000)]
         XCTAssertTrue(AppPowerAggregator.aggregate(previous: before, current: after, interval: 0).isEmpty)
     }
 
     /// A parent chain that loops must not spin forever.
-    func testParentCycleTerminates() {
+    @Test func testParentCycleTerminates() {
         let before = index([sample(10, 11, "A", 0), sample(11, 10, "B", 0)])
         let after = [sample(10, 11, "A", 1_000_000_000), sample(11, 10, "B", 1_000_000_000)]
         let rows = AppPowerAggregator.aggregate(previous: before, current: after, interval: 1)
@@ -92,7 +92,7 @@ final class AppPowerAggregatorTests: XCTestCase {
 
     /// An orphan keeps its own name rather than being attributed to something
     /// it does not belong to.
-    func testUnknownProcessKeepsItsOwnName() {
+    @Test func testUnknownProcessKeepsItsOwnName() {
         let before = index([sample(99, 1, "some-daemon", 0)])
         let after = [sample(99, 1, "some-daemon", 2_000_000_000)]
         let rows = AppPowerAggregator.aggregate(
@@ -102,33 +102,33 @@ final class AppPowerAggregatorTests: XCTestCase {
     }
 }
 
-final class RuntimeEstimateTests: XCTestCase {
+@Suite struct RuntimeEstimateTests {
 
     /// 70 Wh at 20 W is three and a half hours.
-    func testSecondsFromEnergyAndLoad() {
+    @Test func testSecondsFromEnergyAndLoad() {
         let s = RuntimeEstimate.seconds(remainingWh: 70, load: 20)
         XCTAssertEqual(s ?? 0, 12600, accuracy: 1)
         XCTAssertEqual(RuntimeEstimate.format(s), "3h 30m")
     }
 
     /// The reference screenshot's state: a 104.69 W load empties 55.4 Wh fast.
-    func testHeavyLoadGivesShortRuntime() {
+    @Test func testHeavyLoadGivesShortRuntime() {
         let s = RuntimeEstimate.seconds(remainingWh: 55.4, load: 104.69)
         XCTAssertEqual(RuntimeEstimate.format(s), "31m")
     }
 
     /// A load near zero would divide out to an absurd number of hours.
-    func testNegligibleLoadHasNoAnswer() {
+    @Test func testNegligibleLoadHasNoAnswer() {
         XCTAssertNil(RuntimeEstimate.seconds(remainingWh: 70, load: 0))
         XCTAssertNil(RuntimeEstimate.seconds(remainingWh: 70, load: 0.2))
     }
 
-    func testEmptyOrUnknownPackHasNoAnswer() {
+    @Test func testEmptyOrUnknownPackHasNoAnswer() {
         XCTAssertNil(RuntimeEstimate.seconds(remainingWh: nil, load: 20))
         XCTAssertNil(RuntimeEstimate.seconds(remainingWh: 0, load: 20))
     }
 
-    func testFormatting() {
+    @Test func testFormatting() {
         XCTAssertNil(RuntimeEstimate.format(nil))
         XCTAssertNil(RuntimeEstimate.format(0))
         XCTAssertEqual(RuntimeEstimate.format(59 * 60), "59m")
@@ -137,9 +137,9 @@ final class RuntimeEstimateTests: XCTestCase {
     }
 }
 
-final class LoadAveragerTests: XCTestCase {
+@Suite struct LoadAveragerTests {
 
-    func testAveragesSamples() {
+    @Test func testAveragesSamples() {
         var a = LoadAverager(window: 4)
         for v in [10.0, 20.0, 30.0] { a.add(v) }
         XCTAssertEqual(a.average ?? 0, 20, accuracy: 1e-9)
@@ -147,18 +147,18 @@ final class LoadAveragerTests: XCTestCase {
 
     /// Only the window's worth of recent load counts, so the estimate follows
     /// a sustained change instead of being anchored to an old one.
-    func testWindowDropsOldSamples() {
+    @Test func testWindowDropsOldSamples() {
         var a = LoadAverager(window: 3)
         for v in [100.0, 100.0, 100.0, 10.0, 10.0, 10.0] { a.add(v) }
         XCTAssertEqual(a.count, 3)
         XCTAssertEqual(a.average ?? 0, 10, accuracy: 1e-9)
     }
 
-    func testNoSamplesHasNoAverage() {
+    @Test func testNoSamplesHasNoAverage() {
         XCTAssertNil(LoadAverager().average)
     }
 
-    func testRejectsNonsense() {
+    @Test func testRejectsNonsense() {
         var a = LoadAverager()
         a.add(.nan)
         a.add(-5)
@@ -166,11 +166,11 @@ final class LoadAveragerTests: XCTestCase {
     }
 }
 
-final class SampleGuardTests: XCTestCase {
+@Suite struct SampleGuardTests {
 
     /// One dropped adapter reading must not redraw the panel as though the
     /// cable had been pulled out.
-    func testZeroAdapterOnACIsRejected() {
+    @Test func testZeroAdapterOnACIsRejected() {
         let good = PowerSnapshot(externalConnected: true, adapterPower: 46.8,
                                  batteryPower: 0, systemLoad: 46.8)
         let glitch = PowerSnapshot(externalConnected: true, adapterPower: 0,
@@ -181,7 +181,7 @@ final class SampleGuardTests: XCTestCase {
     }
 
     /// Actually unplugging must still come straight through.
-    func testGenuineUnplugIsNotSuppressed() {
+    @Test func testGenuineUnplugIsNotSuppressed() {
         let good = PowerSnapshot(externalConnected: true, adapterPower: 46.8,
                                  batteryPower: 0, systemLoad: 46.8)
         let unplugged = PowerSnapshot(externalConnected: false, adapterPower: 0,
@@ -193,7 +193,7 @@ final class SampleGuardTests: XCTestCase {
     }
 
     /// A running machine always consumes something.
-    func testZeroLoadIsRejected() {
+    @Test func testZeroLoadIsRejected() {
         let good = PowerSnapshot(externalConnected: false, adapterPower: 0,
                                  batteryPower: -14.3, systemLoad: 14.3)
         let glitch = PowerSnapshot(externalConnected: false, adapterPower: 0,
@@ -202,7 +202,7 @@ final class SampleGuardTests: XCTestCase {
     }
 
     /// With no history there is nothing to fall back on.
-    func testFirstSamplePassesThrough() {
+    @Test func testFirstSamplePassesThrough() {
         let first = PowerSnapshot(externalConnected: true, adapterPower: 0, systemLoad: 0)
         XCTAssertEqual(SampleGuard.reconcile(first, previous: nil).adapterPower, 0)
     }

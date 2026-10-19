@@ -1,20 +1,20 @@
 import CoreGraphics
 import SwiftUI
-import XCTest
+import Testing
 @testable import PowerFlowKit
 
 /// The ribbon has to be an animatable `Shape` rather than a plain `Path`.
 /// A `Path` view cannot be interpolated, so the ribbons snapped to each new
 /// reading while the node cards animated - the mismatch that made the panel
 /// look jerky. These tests pin the interpolation contract.
-final class RibbonShapeTests: XCTestCase {
+@Suite struct RibbonShapeTests {
 
     private let a = RibbonShape(startTop: 0, startBottom: 100, endTop: 200, endBottom: 300,
                                 x0: 10, x1: 110)
     private let b = RibbonShape(startTop: 40, startBottom: 200, endTop: 400, endBottom: 500,
                                 x0: 10, x1: 110)
 
-    func testAnimatableDataRoundTrips() {
+    @Test func testAnimatableDataRoundTrips() {
         var shape = a
         let data = shape.animatableData
         shape.animatableData = data
@@ -25,7 +25,7 @@ final class RibbonShapeTests: XCTestCase {
     }
 
     /// Halfway through an animation every edge must be halfway between.
-    func testInterpolationProducesIntermediateGeometry() {
+    @Test func testInterpolationProducesIntermediateGeometry() {
         var mid = a
         var data = a.animatableData
         var target = b.animatableData
@@ -42,7 +42,7 @@ final class RibbonShapeTests: XCTestCase {
 
     /// An interpolated shape must still draw a sane ribbon, not a degenerate
     /// or inverted one.
-    func testInterpolatedPathStaysBetweenTheEndpoints() {
+    @Test func testInterpolatedPathStaysBetweenTheEndpoints() {
         var mid = a
         var data = a.animatableData
         var target = b.animatableData
@@ -60,14 +60,14 @@ final class RibbonShapeTests: XCTestCase {
     }
 
     /// The horizontal span is set by the column layout and never animates.
-    func testPathSpansTheGivenXRange() {
+    @Test func testPathSpansTheGivenXRange() {
         let box = a.path(in: CGRect(x: 0, y: 0, width: 200, height: 600)).boundingRect
         XCTAssertEqual(box.minX, 10, accuracy: 0.5)
         XCTAssertEqual(box.maxX, 110, accuracy: 0.5)
     }
 
     /// The convenience initialiser must agree with the laid-out link.
-    func testInitFromLinkMatchesLayout() {
+    @Test func testInitFromLinkMatchesLayout() {
         let layout = SankeyLayout.make(
             for: .sample,
             in: CGRect(x: 57, y: 194, width: 1165, height: 474),
@@ -82,7 +82,7 @@ final class RibbonShapeTests: XCTestCase {
 
     /// A curve shorter than the gap between readings finishes early and leaves
     /// the panel frozen until the next one, which is what reads as a stutter.
-    func testAnimationOutlastsTheSampleInterval() {
+    @Test func testAnimationOutlastsTheSampleInterval() {
         XCTAssertGreaterThan(Motion.sampleInterval * 1.2, Motion.sampleInterval)
     }
 }

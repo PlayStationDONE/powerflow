@@ -109,8 +109,9 @@ enum PowerFlowMain {
         let app = NSApplication.shared
         let delegate = AppDelegate()
         app.delegate = delegate
-        // Menu-bar only: no Dock tile, no main menu.
-        app.setActivationPolicy(.accessory)
+        // A normal app (Dock tile + window) by default; menu-bar only when the
+        // user has turned "Show in Dock" off.
+        app.setActivationPolicy(Settings.showInDockDefault ? .regular : .accessory)
         app.run()
     }
 }
@@ -122,6 +123,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var statusItem: NSStatusItem!
     private var popover: NSPopover!
     private let monitor = PowerMonitor()
+    private lazy var dashboard = DashboardController(monitor: monitor)
     private let markers = MarkerWatcher()
     private let anchor = AnchorWindow()
     private var observer: AnyObject?
@@ -153,6 +155,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         )
 
         updateStatusLabel()
+        // Open the window at launch, except when macOS started the app as a
+        // login item (then it should just appear in the menu bar), or when the
+        // user runs menu-bar only. `--dashboard` forces it (used for QA).
+        let forced = CommandLine.arguments.contains("--dashboard")
+        if forced || (Settings.shared.showInDock && !Self.launchedAsLoginItem) {
+            DispatchQueue.main.async { [weak self] in self?.dashboard.show() }
+        } else if Settings.shared.showInDock {
+            dashboard.installMainMenuIfNeeded()
+        }
+        NotificationCenter.default.addObserver(
+            forName: .openDashboardRequested, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.openDashboard() }
+        }
 
         // A full menu bar can leave the status item unreachable, so there is
         // always a keyboard way in.
@@ -247,10 +263,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         guard let button = statusItem.button else { return }
         let s = monitor.snapshot
         let config = NSImage.SymbolConfiguration(pointSize: 14, weight: .regular)
-        button.image = NSImage(
-            systemSymbolName: symbolName(for: s),
-            accessibilityDescription: "Battery"
-        )?.withSymbolConfiguration(config)
+        button.image = Self.menuBarIcon
+            ?? NSImage(
+                systemSymbolName: symbolName(for: s),
+                accessibilityDescription: "Battery"
+            )?.withSymbolConfiguration(config)
         switch Settings.shared.menuBarStyle {
         case .iconOnly:
             button.title = ""
@@ -262,6 +279,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         button.toolTip = tooltip(for: s)
         markers.check(s, settings: .shared)
     }
+
+    /// The PowerFlow glyph as a template image, so the system tints it for light,
+    /// dark and highlighted menu bars. Nil when run outside the app bundle, in
+    /// which case the battery symbol is used.
+    private static let menuBarIcon: NSImage? = {
+        guard let url = Bundle.main.url(forResource: "MenuBarIcon", withExtension: "png"),
+              let image = NSImage(contentsOf: url) else { return nil }
+        image.size = NSSize(width: 26, height: 18)   // PNG is 52x36 px (@2x)
+        image.isTemplate = true
+        image.accessibilityDescription = "PowerFlow"
+        return image
+    }()
 
     private func symbolName(for s: PowerSnapshot) -> String {
         if s.isCharging { return "battery.100.bolt" }
@@ -356,9 +385,61 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         popover.contentViewController?.view.window?.makeKey()
     }
 
+    /// True when the system launched the app at login (Launch at Login).
+    private static var launchedAsLoginItem: Bool {
+        NSAppleEventManager.shared().currentAppleEvent?
+            .paramDescriptor(forKeyword: AEKeyword(keyAEPropData))?
+            .enumCodeValue == OSType(keyAELaunchedAsLogInItem)
+    }
+
+    /// Clicking the Dock tile brings the window back.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if Settings.shared.showInDock { dashboard.show() }
+        return true
+    }
+
+    /// Closing the window leaves the menu-bar item running; Quit ends the app.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    @objc private func toggleShowInDock() {
+        let on = !Settings.shared.showInDock
+        Settings.shared.showInDock = on
+        if on { dashboard.show() } else { NSApp.setActivationPolicy(.accessory) }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        monitor.shutdown()
+    }
+
+    @objc private func openDashboard() {
+        if popover.isShown { popover.performClose(nil) }
+        dashboard.show()
+    }
+
+    @objc private func toggleRecordHistory() {
+        Settings.shared.recordHistory.toggle()
+    }
+
+    @objc private func exportHistory() {
+        HistoryActions.export(monitor: monitor, since: nil) { message in
+            let alert = NSAlert()
+            alert.messageText = "Couldn\u{2019}t export history"
+            alert.informativeText = message
+            alert.runModal()
+        }
+    }
+
+    @objc private func deleteHistory() {
+        HistoryActions.confirmAndDelete(monitor: monitor)
+    }
+
     private func showMenu() {
         let menu = NSMenu()
         let s = monitor.snapshot
+        let open = NSMenuItem(title: "Open Dashboard\u{2026}", action: #selector(openDashboard), keyEquivalent: "d")
+        open.target = self
+        menu.addItem(open)
+        menu.addItem(.separator())
         if let name = s.adapterName {
             menu.addItem(withTitle: name, action: nil, keyEquivalent: "")
             menu.addItem(.separator())
@@ -396,6 +477,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
 
         menu.addItem(.separator())
+        let record = NSMenuItem(title: "Record History", action: #selector(toggleRecordHistory), keyEquivalent: "")
+        record.target = self
+        record.state = Settings.shared.recordHistory ? .on : .off
+        menu.addItem(record)
+        let export = NSMenuItem(title: "Export History as CSV\u{2026}", action: #selector(exportHistory), keyEquivalent: "")
+        export.target = self
+        menu.addItem(export)
+        let delete = NSMenuItem(title: "Delete History\u{2026}", action: #selector(deleteHistory), keyEquivalent: "")
+        delete.target = self
+        menu.addItem(delete)
+        menu.addItem(.separator())
+        let dock = NSMenuItem(title: "Show in Dock", action: #selector(toggleShowInDock), keyEquivalent: "")
+        dock.target = self
+        dock.state = Settings.shared.showInDock ? .on : .off
+        menu.addItem(dock)
         let login = NSMenuItem(
             title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: ""
         )
@@ -435,6 +531,10 @@ struct PanelRoot: View {
     }
 }
 
+extension Notification.Name {
+    static let openDashboardRequested = Notification.Name("PowerFlow.openDashboard")
+}
+
 // MARK: - Offscreen rendering for QA
 
 @MainActor
@@ -472,7 +572,7 @@ enum Renderer {
                 DrawRow(id: $0.pid, name: $0.name, watts: $0.watts,
                         icon: RunningApps.icon(for: $0.pid), isSystem: false)
             }
-            rows.append(DrawRow(id: -1, name: "System & display",
+            rows.append(DrawRow(id: -1, name: "Not attributed (residual)",
                                 watts: max(0, snapshot.systemLoad - attributed),
                                 icon: nil, isSystem: true))
             runtime = RuntimeEstimate.format(RuntimeEstimate.seconds(
@@ -521,7 +621,7 @@ enum Renderer {
                     icon: nil, isSystem: false)
         }
         let attributed = scaled.reduce(0) { $0 + $1.watts }
-        return scaled + [DrawRow(id: -1, name: "System & display",
+        return scaled + [DrawRow(id: -1, name: "Not attributed (residual)",
                                  watts: max(0, snapshot.systemLoad - attributed),
                                  icon: nil, isSystem: true)]
     }
