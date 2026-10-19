@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import PowerFlowKit
 import ServiceManagement
@@ -38,14 +39,48 @@ final class Settings: ObservableObject {
         case iconOnly
         case iconAndPercent
         case iconAndWatts
+        case wattsGraph
+        case batteryGlyph
 
         var title: String {
             switch self {
             case .iconOnly: return "Icon Only"
             case .iconAndPercent: return "Icon and Percentage"
             case .iconAndWatts: return "Icon and Watts"
+            case .wattsGraph: return "Watts and Graph"
+            case .batteryGlyph: return "Battery with Percentage"
             }
         }
+    }
+
+    /// Colour of the menu-bar chart. `system` follows the macOS accent colour.
+    enum MenuBarAccent: String, CaseIterable {
+        case system, blue, purple, pink, red, orange, yellow, green, teal
+
+        var title: String { rawValue.prefix(1).uppercased() + rawValue.dropFirst() }
+
+        var nsColor: NSColor {
+            switch self {
+            case .system: return .controlAccentColor
+            case .blue: return .systemBlue
+            case .purple: return .systemPurple
+            case .pink: return .systemPink
+            case .red: return .systemRed
+            case .orange: return .systemOrange
+            case .yellow: return .systemYellow
+            case .green: return .systemGreen
+            case .teal: return .systemTeal
+            }
+        }
+    }
+
+    @Published var menuBarAccent: MenuBarAccent {
+        didSet { defaults.set(menuBarAccent.rawValue, forKey: "menuBarAccent") }
+    }
+
+    /// Whether the PowerFlow glyph leads the text styles.
+    @Published var showMenuBarIcon: Bool {
+        didSet { defaults.set(showMenuBarIcon, forKey: "showMenuBarIcon") }
     }
 
     @Published var menuBarStyle: MenuBarStyle {
@@ -78,6 +113,9 @@ final class Settings: ObservableObject {
         resumeFloor = f > 0 ? f : 0.75
         menuBarStyle = MenuBarStyle(rawValue: defaults.string(forKey: "menuBarStyle") ?? "")
             ?? .iconOnly
+        menuBarAccent = MenuBarAccent(rawValue: defaults.string(forKey: "menuBarAccent") ?? "")
+            ?? .system
+        showMenuBarIcon = (defaults.object(forKey: "showMenuBarIcon") as? Bool) ?? true
     }
 
     /// Markers are clamped so the floor always stays below the target.

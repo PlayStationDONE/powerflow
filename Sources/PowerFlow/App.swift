@@ -134,7 +134,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             button.target = self
             button.action = #selector(statusItemClicked(_:))
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
-            button.imagePosition = .imageLeading
+            button.imagePosition = .imageOnly
+            button.setAccessibilityLabel("PowerFlow")
         }
 
         popover = NSPopover()
@@ -259,25 +260,72 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         return false
     }
 
+    private var wattHistory: [Double] = []
+    private var lastWattSample: Date?
+    private var lastMenuBarInputs: MenuBarRenderer.Inputs?
+    private static let wattHistoryLimit = 30
+
     private func updateStatusLabel() {
         guard let button = statusItem.button else { return }
         let s = monitor.snapshot
-        let config = NSImage.SymbolConfiguration(pointSize: 14, weight: .regular)
-        button.image = Self.menuBarIcon
-            ?? NSImage(
-                systemSymbolName: symbolName(for: s),
-                accessibilityDescription: "Battery"
-            )?.withSymbolConfiguration(config)
-        switch Settings.shared.menuBarStyle {
-        case .iconOnly:
-            button.title = ""
-        case .iconAndPercent:
-            button.title = " \(Int(s.percent.rounded()))%"
-        case .iconAndWatts:
-            button.title = String(format: " %.0fW", s.systemLoad)
+        let settings = Settings.shared
+
+        // Both the notification and the 1 s timer land here; sample at most once a
+        // second so the chart's time axis stays even.
+        let now = Date()
+        if lastWattSample.map({ now.timeIntervalSince($0) >= 0.9 }) ?? true {
+            lastWattSample = now
+            wattHistory.append(max(s.systemLoad, 0))
+            if wattHistory.count > Self.wattHistoryLimit {
+                wattHistory.removeFirst(wattHistory.count - Self.wattHistoryLimit)
+            }
         }
+
+        button.imagePosition = .imageOnly
+        if settings.menuBarStyle == .iconOnly {
+            // Template art: the system tints it for light, dark and highlighted bars.
+            lastMenuBarInputs = nil
+            button.image = Self.menuBarIcon
+                ?? NSImage(
+                    systemSymbolName: symbolName(for: s),
+                    accessibilityDescription: "Battery"
+                )?.withSymbolConfiguration(.init(pointSize: 14, weight: .regular))
+        } else {
+            let appearance = button.effectiveAppearance
+            var accent = settings.menuBarAccent.nsColor
+            // Resolve dynamic colours so an accent change compares as different.
+            appearance.performAsCurrentDrawingAppearance {
+                accent = accent.usingColorSpace(.deviceRGB) ?? accent
+            }
+            let inputs = MenuBarRenderer.Inputs(
+                style: settings.menuBarStyle,
+                percent: Int(s.percent.rounded()),
+                isCharging: s.isCharging,
+                watts: Int(s.systemLoad.rounded()),
+                samples: MenuBarRenderer.drawsSparkline(settings.menuBarStyle) ? wattHistory : [],
+                accent: accent,
+                showIcon: settings.showMenuBarIcon,
+                appearanceName: appearance.name
+            )
+            if inputs != lastMenuBarInputs {
+                lastMenuBarInputs = inputs
+                button.image = MenuBarRenderer.render(
+                    inputs, icon: Self.menuBarIcon, appearance: appearance
+                )
+                button.setAccessibilityValue(Self.accessibilityValue(for: inputs))
+            }
+        }
+        button.title = ""
         button.toolTip = tooltip(for: s)
         markers.check(s, settings: .shared)
+    }
+
+    private static func accessibilityValue(for inputs: MenuBarRenderer.Inputs) -> String {
+        switch inputs.style {
+        case .iconOnly: return ""
+        case .iconAndPercent, .batteryGlyph: return "\(inputs.percent)%"
+        case .iconAndWatts, .wattsGraph: return "\(inputs.watts) watts"
+        }
     }
 
     /// The PowerFlow glyph as a template image, so the system tints it for light,
@@ -320,6 +368,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         guard let raw = sender.representedObject as? String,
               let style = Settings.MenuBarStyle(rawValue: raw) else { return }
         Settings.shared.menuBarStyle = style
+        updateStatusLabel()
+    }
+
+    @objc private func setMenuBarAccent(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let accent = Settings.MenuBarAccent(rawValue: raw) else { return }
+        Settings.shared.menuBarAccent = accent
+        updateStatusLabel()
+    }
+
+    @objc private func toggleMenuBarIcon() {
+        Settings.shared.showMenuBarIcon.toggle()
         updateStatusLabel()
     }
 
@@ -464,6 +524,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             item.state = Settings.shared.menuBarStyle == style ? .on : .off
             styleMenu.addItem(item)
         }
+        styleMenu.addItem(.separator())
+        let iconToggle = NSMenuItem(title: "Show Icon", action: #selector(toggleMenuBarIcon), keyEquivalent: "")
+        iconToggle.target = self
+        iconToggle.state = Settings.shared.showMenuBarIcon ? .on : .off
+        styleMenu.addItem(iconToggle)
+        let accentItem = NSMenuItem(title: "Graph Color", action: nil, keyEquivalent: "")
+        let accentMenu = NSMenu()
+        for accent in Settings.MenuBarAccent.allCases {
+            let item = NSMenuItem(title: accent.title, action: #selector(setMenuBarAccent(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = accent.rawValue
+            item.state = Settings.shared.menuBarAccent == accent ? .on : .off
+            accentMenu.addItem(item)
+        }
+        accentItem.submenu = accentMenu
+        styleMenu.addItem(accentItem)
         styleItem.submenu = styleMenu
         menu.addItem(styleItem)
 
@@ -833,7 +909,7 @@ final class AnimTestDelegate: NSObject, NSApplicationDelegate {
 }
 
 
-/// Renders the real status-item button in each label style.
+/// Renders each rendered menu-bar style to a PNG using the real renderer.
 ///
 /// The menu bar itself cannot be screenshotted without Screen Recording
 /// permission, and on a full menu bar the item is hidden behind the notch
@@ -841,41 +917,37 @@ final class AnimTestDelegate: NSObject, NSApplicationDelegate {
 @MainActor
 final class MenuBarShotDelegate: NSObject, NSApplicationDelegate {
     private let dir: String
-    private var item: NSStatusItem!
     init(dir: String) { self.dir = dir }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        guard let button = item.button else { exit(1) }
-        // The menu bar is dark here, so template art draws light.
-        button.appearance = NSAppearance(named: .darkAqua)
-        button.imagePosition = .imageLeading
-
         let snapshot = PowerReader().read() ?? .sample
-        let styles: [(String, String)] = [
-            ("iconOnly", ""),
-            ("iconAndPercent", " \(Int(snapshot.percent.rounded()))%"),
-            ("iconAndWatts", String(format: " %.0fW", snapshot.systemLoad)),
-        ]
-        let config = NSImage.SymbolConfiguration(pointSize: 14, weight: .regular)
-        button.image = NSImage(systemSymbolName: "battery.100",
-                               accessibilityDescription: "Battery")?
-            .withSymbolConfiguration(config)
+        let appearance = NSAppearance(named: .darkAqua)!
+        let icon = Bundle.main.url(forResource: "MenuBarIcon", withExtension: "png")
+            .flatMap { NSImage(contentsOf: $0) }
+        icon?.size = NSSize(width: 26, height: 18)
+        let wave = (0..<30).map { 12 + 8 * sin(Double($0) / 3) + Double($0 % 5) }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-            for (name, title) in styles {
-                button.title = title
-                button.sizeToFit()
-                button.layoutSubtreeIfNeeded()
-                button.display()
-                guard let rep = button.bitmapImageRepForCachingDisplay(in: button.bounds)
-                else { continue }
-                button.cacheDisplay(in: button.bounds, to: rep)
-                if let png = rep.representation(using: .png, properties: [:]) {
-                    try? png.write(to: URL(fileURLWithPath: "\(self.dir)/menubar-\(name).png"))
+            for style in Settings.MenuBarStyle.allCases where style != .iconOnly {
+                let inputs = MenuBarRenderer.Inputs(
+                    style: style,
+                    percent: Int(snapshot.percent.rounded()),
+                    isCharging: snapshot.isCharging,
+                    watts: Int(snapshot.systemLoad.rounded()),
+                    samples: MenuBarRenderer.drawsSparkline(style) ? wave : [],
+                    accent: Settings.MenuBarAccent.system.nsColor,
+                    showIcon: true,
+                    appearanceName: appearance.name
+                )
+                // The menu bar is dark here, so the art draws light.
+                let image = MenuBarRenderer.render(inputs, icon: icon, appearance: appearance)
+                if let tiff = image.tiffRepresentation,
+                   let rep = NSBitmapImageRep(data: tiff),
+                   let png = rep.representation(using: .png, properties: [:]) {
+                    try? png.write(to: URL(fileURLWithPath: "\(self.dir)/menubar-\(style.rawValue).png"))
                 }
-                print(String(format: "%@: %.0f x %.0f pt", name,
-                             button.bounds.width, button.bounds.height))
+                print(String(format: "%@: %.0f x %.0f pt", style.rawValue,
+                             image.size.width, image.size.height))
             }
             exit(0)
         }
