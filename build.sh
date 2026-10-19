@@ -8,7 +8,7 @@ cd "$(dirname "$0")"
 
 APP_NAME="PowerFlow"
 BUNDLE_ID="com.dylan.powerflow"
-VERSION="1.0"
+VERSION="1.1.0"
 OUT="build/${APP_NAME}.app"
 
 # SwiftUI in the macOS 27 SDK expands @State through a macro plugin that ships
